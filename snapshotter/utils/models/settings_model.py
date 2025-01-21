@@ -95,6 +95,7 @@ class Settings(BaseModel):
     instance_id: str
     signer_private_key: str
     local_collector_port: int
+    local_collector_host: str
     slot_id: int
     rpc: RPCConfigFull
     rlimit: RLimit

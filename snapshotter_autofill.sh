@@ -42,6 +42,19 @@ if [ "$IPFS_URL" ]; then
     echo "Found IPFS_URL ${IPFS_URL}";
 fi
 
+if [ "$LOCAL_COLLECTOR_HOST" ]; then
+    echo "Found LOCAL_COLLECTOR_HOST ${LOCAL_COLLECTOR_HOST}";
+else
+    echo "LOCAL_COLLECTOR_HOST not found, please set this in your .env!";
+    exit 1;
+fi
+
+if [ "$LOCAL_COLLECTOR_PORT" ]; then
+    echo "Found LOCAL_COLLECTOR_PORT ${LOCAL_COLLECTOR_PORT}";
+else
+    echo "LOCAL_COLLECTOR_PORT not found, please set this in your .env!";
+    exit 1;
+fi
 
 if [ "$SLACK_REPORTING_URL" ]; then
     echo "Found SLACK_REPORTING_URL ${SLACK_REPORTING_URL}";
@@ -88,7 +101,7 @@ export slack_reporting_url="${SLACK_REPORTING_URL:-}"
 export powerloom_reporting_url="${POWERLOOM_REPORTING_URL:-}"
 export telegram_reporting_url="${TELEGRAM_REPORTING_URL:-}"
 export telegram_chat_id="${TELEGRAM_CHAT_ID:-}"
-
+export local_collector_host="${LOCAL_COLLECTOR_HOST:-}"
 
 # If IPFS_URL is empty, clear IPFS API key and secret
 if [ -z "$IPFS_URL" ]; then
@@ -107,7 +120,7 @@ echo "Using powerloom reporting url: ${powerloom_reporting_url}"
 echo "Using web3 storage token: ${web3_storage_token}"
 echo "Using telegram reporting url: ${telegram_reporting_url}"
 echo "Using telegram chat id: ${telegram_chat_id}"
-
+echo "Using local collector host: ${local_collector_host}"
 sed -i'.backup' "s#relevant-namespace#$namespace#" config/settings.json
 
 sed -i'.backup' "s#account-address#$SIGNER_ACCOUNT_ADDRESS#" config/settings.json
@@ -134,7 +147,8 @@ sed -i'.backup' "s#https://powerloom-reporting-url#$powerloom_reporting_url#" co
 
 sed -i'.backup' "s#signer-account-private-key#$SIGNER_ACCOUNT_PRIVATE_KEY#" config/settings.json
 
-sed -i'.backup' "s#local-collector-port#$local_collector_port#" config/settings.json
+sed -i'.backup' "s#\"local-collector-port\"#$local_collector_port#" config/settings.json
+sed -i'.backup' "s#local-collector-host#$local_collector_host#" config/settings.json
 
 sed -i'.backup' "s#https://telegram-reporting-url#$telegram_reporting_url#" config/settings.json
 sed -i'.backup' "s#telegram-chat-id#$telegram_chat_id#" config/settings.json

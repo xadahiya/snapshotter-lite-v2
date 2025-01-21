@@ -22,55 +22,31 @@ if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
     export LOCAL_COLLECTOR_PORT=50051
 fi
 
-echo "🔄 Starting collector connectivity checks..."
+echo "🔄 Checking for existing collector..."
 
-# Array of hosts to try
-hosts=("localhost" "127.0.0.1" "0.0.0.0")
-test_ping=false
-test_namespace=false
+# Look for existing collector with matching namespace pattern
+existing_collector=$(docker ps --format '{{.Names}}' | grep "snapshotter-lite-local-collector.*${FULL_NAMESPACE}" || true)
 
-# Test port connectivity
-if command -v nc &> /dev/null; then
-    test_command="nc -z"
-    for host in "${hosts[@]}"; do
-        echo "  ⏳ Testing ${host}:${LOCAL_COLLECTOR_PORT}"
-        if ${test_command} "${host}" "${LOCAL_COLLECTOR_PORT}" 2>/dev/null; then
-            test_ping=true
-            break
-        fi
-    done
+if [ -n "$existing_collector" ]; then
+    echo "✅ Found existing collector: ${existing_collector} for data market namespace: ${FULL_NAMESPACE}"
+    
+    # Get network information and port mapping
+    network_info=$(docker container inspect "$existing_collector" --format '{{range $net,$v := .NetworkSettings.Networks}}{{printf "%s\n" $net}}{{end}}' | head -n 1)
+    # Get the first available host port binding (preferring IPv4)
+    port_info=$(docker container inspect "$existing_collector" --format '{{range $p, $conf := .NetworkSettings.Ports}}{{range $conf}}{{if eq .HostIp "0.0.0.0"}}{{.HostPort}}{{end}}{{end}}{{end}}' | head -n 1)
+    
+    if [ -n "$network_info" ] && [ -n "$port_info" ]; then
+        echo "✅ Using existing collector on network: $network_info with port: $port_info"
+        # Export both connection string and port
+        echo "LOCAL_COLLECTOR_HOST=${existing_collector}@${network_info}"
+        echo "LOCAL_COLLECTOR_PORT=${port_info}"
+        exit 100
+    else
+        echo "🟠 Could not determine existing network/port for collector in data market namespace: ${FULL_NAMESPACE}"
+        exit 101
+        echo "LOCAL_COLLECTOR_PORT=${LOCAL_COLLECTOR_PORT}"
+    fi
 else
-    test_command="curl -s --connect-timeout 5"
-    for host in "${hosts[@]}"; do
-        echo "  ⏳ Testing ${host}:${LOCAL_COLLECTOR_PORT}"
-        if $test_command "${host}:${LOCAL_COLLECTOR_PORT}" 2>/dev/null; then
-            test_ping=true
-            break
-        fi
-    done
-fi
-
-# Test container status
-container_name="snapshotter-lite-local-collector-${SLOT_ID}-${FULL_NAMESPACE}"
-if ! docker ps | grep -q "$container_name"; then
-    echo "❌ Collector container not found: $container_name"
-else
-    echo "✅ Collector container running: $container_name"
-    test_namespace=true
-fi
-
-# Final status check
-if [ "$test_ping" = true ] && [ "$test_namespace" = true ]; then
-    echo "✅ Collector is running and reachable"
-    exit 100
-else
-    echo "⚠️  No active collector found - searching for available ports..."
-    for port in {50051..51050}; do
-        if ! nc -z localhost $port 2>/dev/null; then
-            echo "✅ Found available port: $port"
-            sed -i".backup" "s/^LOCAL_COLLECTOR_PORT=.*/LOCAL_COLLECTOR_PORT=${port}/" "${ENV_FILE}"
-            break
-        fi
-    done
+    echo "⚠️ No active collector found for namespace: ${FULL_NAMESPACE}"
     exit 101
 fi

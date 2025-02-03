@@ -62,12 +62,6 @@ services:
       - SNAPSHOTTER_COMPUTE_REPO=$SNAPSHOTTER_COMPUTE_REPO
       - SNAPSHOTTER_COMPUTE_REPO_BRANCH=$SNAPSHOTTER_COMPUTE_REPO_BRANCH
       - CRON_RESTART=$CRON_RESTART
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
     command: >
       bash -c "
         rm -f /app/last_successful_submission.txt;

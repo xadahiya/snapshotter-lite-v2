@@ -136,6 +136,12 @@ handle_docker_pull() {
     export IMAGE_TAG
     export DOCKER_NETWORK_NAME
 
+    # check if DOCKER_NETWORK_NAME exists otherwise create it, it's a bridge network
+    if ! docker network ls | grep -q "$DOCKER_NETWORK_NAME"; then
+        echo "🔄 Creating docker network $DOCKER_NETWORK_NAME"
+        docker network create --driver bridge "$DOCKER_NETWORK_NAME"
+    fi
+
     if [ "$DEV_MODE" = "true" ]; then
         echo "🏗️ Building the docker image"
         ./build-docker.sh

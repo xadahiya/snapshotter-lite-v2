@@ -40,13 +40,15 @@ class EventDetectorProcess(multiprocessing.Process):
 
     This class monitors the blockchain for specific events like epoch releases,
     day starts, and daily task completions. It processes these events and
-    handles system shutdown gracefully.
+    handles system shutdown gracefully. The class maintains state about processed blocks,
+    handles error conditions, and provides notification capabilities.
 
     Attributes:
         _shutdown_initiated (bool): Flag indicating if shutdown has been initiated
         _logger (Logger): Logger instance for this process
         _last_processed_block (int): Last blockchain block that was processed
-        rpc_helper (RpcHelper): Helper for RPC interactions
+        rpc_helper (RpcHelper): Helper for RPC interactions with anchor chain
+        _source_rpc_helper (RpcHelper): Helper for RPC interactions with source chain
         contract_abi (dict): Contract ABI for interacting with smart contracts
         contract_address (str): Address of the contract being monitored
         contract (Contract): Web3 contract instance
@@ -54,7 +56,11 @@ class EventDetectorProcess(multiprocessing.Process):
         event_abi (dict): Event ABIs for decoding events
         notification_cooldown (int): Minimum time between notifications in seconds
         failure_count (int): Counter for consecutive failures
-        last_status_check_time (int): Timestamp of last failure
+        last_status_check_time (int): Timestamp of last status check
+        _initialized (bool): Flag indicating if process has been initialized
+        _last_reporting_service_ping (int): Timestamp of last reporting service ping
+        _last_reporting_message_sent (int): Timestamp of last reporting message
+        last_notification_time (int): Timestamp of last notification sent
     """
 
     def __init__(self, name, **kwargs):
@@ -62,8 +68,8 @@ class EventDetectorProcess(multiprocessing.Process):
         Initialize the EventDetectorProcess.
 
         Args:
-            name (str): Name of the process
-            **kwargs: Additional arguments passed to multiprocessing.Process
+            name (str): Name of the process for logging and identification
+            **kwargs: Additional keyword arguments passed to multiprocessing.Process
         """
         multiprocessing.Process.__init__(self, name=name, **kwargs)
         self._shutdown_initiated = False
@@ -73,10 +79,38 @@ class EventDetectorProcess(multiprocessing.Process):
 
         self._last_processed_block = None
 
-        # Initialize RPC helpers for anchor chain and source chain
+        # Initialize reporting and notification related attributes
+        self._last_reporting_service_ping = 0
+        self._last_reporting_message_sent = 0
+        self.notification_cooldown = 300
+        self.last_notification_time = 0
+        self.failure_count = 0
+        self.last_status_check_time = int(time.time())
+
+        self._initialized = False
+
+    async def init(self):
+        """
+        Initialize the event detector by setting up required components and performing initial checks.
+        
+        This method:
+        1. Initializes RPC helpers for both anchor and source chains
+        2. Sets up the processor distributor
+        3. Loads contract ABI and initializes contract instance
+        4. Creates HTTP clients for reporting and notifications
+        5. Performs initial system checks and bootstrapping
+        6. Waits for required initialization periods
+        
+        Raises:
+            Various exceptions possible during initialization steps
+        """
         self.rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
         self._source_rpc_helper = RpcHelper(rpc_settings=settings.rpc)
-        
+
+        self.processor_distributor = ProcessorDistributor()
+
+        self._logger.info('Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 60 seconds...')
+
         # Load contract ABI from settings
         self.contract_abi = read_json_file(
             settings.protocol_state.abi,
@@ -110,13 +144,8 @@ class EventDetectorProcess(multiprocessing.Process):
             abi=self.contract_abi,
         )
 
-        # Initialize reporting and notification related attributes
-        self._last_reporting_service_ping = 0
-        self._last_reporting_message_sent = 0
-        self.notification_cooldown = 300
-        self.last_notification_time = 0
-        self.failure_count = 0
-        self.last_status_check_time = int(time.time())
+        with open('last_successful_submission.txt', 'w') as f:
+            f.write(str(int(time.time())))
 
         # Define event ABIs and signatures for monitoring
         EVENTS_ABI = {
@@ -136,22 +165,7 @@ class EventDetectorProcess(multiprocessing.Process):
             EVENTS_ABI,
         )
 
-        self.processor_distributor = ProcessorDistributor()
-        self._initialized = False
-
-    async def init(self):
-        """
-        Initialize the event detector by setting up required components and performing initial checks.
-        
-        This method:
-        1. Waits for local collector initialization
-        2. Loads the last processed block
-        3. Initializes the processor distributor
-        4. Performs initial checks and reporting
-        """
-        self._logger.info('Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 60 seconds...')
         await asyncio.sleep(15)
-        self._last_processed_block = await self._load_last_processed_block()
         await self.processor_distributor.init()
         # TODO: introduce setting to control simulation snapshot submission if the node has been bootstrapped earlier
         self._logger.info('Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 60 seconds...')
@@ -163,8 +177,13 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         Perform initial system check and report status.
         
-        Simulates an epoch release event to verify system functionality.
-        Exits with error if simulation fails.
+        This method simulates an epoch release event to verify system functionality.
+        It creates a test event using the current block number and attempts to process it.
+        If the simulation fails, it sends a notification and exits the process.
+        
+        Raises:
+            SystemExit: If simulation event processing fails
+            Exception: Various exceptions possible during event processing
         """
         try:
             self._logger.info('Checking and reporting snapshotter status')
@@ -195,21 +214,24 @@ class EventDetectorProcess(multiprocessing.Process):
 
     async def get_events(self, from_block: int, to_block: int):
         """
-        Retrieves events from the blockchain for the given block range and returns them as a list of tuples.
-        Each tuple contains the event name and an object representing the event data.
+        Retrieves and filters blockchain events for the given block range.
+
+        This method fetches events from the blockchain and processes them based on event type.
+        It filters events based on data market address and snapshotter instance settings.
 
         Args:
-            from_block (int): The starting block number.
-            to_block (int): The ending block number.
+            from_block (int): Starting block number to fetch events from
+            to_block (int): Ending block number to fetch events to
 
         Returns:
-            List[Tuple[str, Any]]: A list of tuples, where each tuple contains the event name
-            and an object representing the event data.
-        """
+            List[Tuple[str, Any]]: List of tuples containing event name and processed event data.
+                Each tuple contains:
+                - Event name (str): Name of the event (EpochReleased/DayStartedEvent/DailyTaskCompletedEvent)
+                - Event data (object): Processed event data object specific to the event type
 
-        if not self._initialized:
-            await self.init()
-            self._initialized = True
+        Raises:
+            Various exceptions possible during RPC calls and event processing
+        """
 
         events_log = await self.rpc_helper.get_events_logs(
             **{
@@ -256,11 +278,20 @@ class EventDetectorProcess(multiprocessing.Process):
 
     def _generic_exit_handler(self, signum, sigframe):
         """
-        Handles the generic exit signal and initiates shutdown.
+        Generic signal handler for graceful process shutdown.
+
+        This handler manages the cleanup process when the application receives
+        termination signals. It ensures resources are properly released and
+        ongoing tasks are cancelled.
 
         Args:
-            signum (int): The signal number.
-            sigframe (object): The signal frame.
+            signum (int): Signal number received
+            sigframe (object): Current stack frame when signal was received
+
+        Note:
+            Handles SIGINT, SIGTERM, and SIGQUIT signals
+            Ensures only one shutdown process runs at a time
+            Forces exit after cleanup using os._exit()
         """
         if (
             signum in [SIGINT, SIGTERM, SIGQUIT] and
@@ -285,33 +316,23 @@ class EventDetectorProcess(multiprocessing.Process):
             finally:
                 os._exit(0)
 
-    async def _save_last_processed_block(self):
-        """Save the last processed block number to a file."""
-        with open("last_processed_block.log", 'w') as f:
-            f.write(str(self._last_processed_block))
-
-    async def _load_last_processed_block(self):
-        """
-        Load the last processed block number from file.
-        
-        Returns:
-            int|None: The last processed block number or None if file doesn't exist
-        """
-        # check if last_processed_block.log exists
-        if os.path.exists("last_processed_block.log"):
-            with open("last_processed_block.log", 'r') as f:
-                return int(f.read())
-        return None
-
     async def check_last_submission(self):
         """
-        Check when the last successful submission occurred and handle any issues.
+        Monitor and verify the health of snapshot submissions.
         
-        This method:
-        1. Checks if too many failures have occurred
-        2. Reads the last submission timestamp
-        3. Sends notifications if submission is overdue
-        4. Updates failure counts and cooldown timers
+        This method checks when the last successful submission occurred and handles any issues:
+        - Tracks consecutive failures and exits if too many occur
+        - Reads timestamp of last successful submission
+        - Sends notifications if submissions are overdue
+        - Manages cooldown periods between notifications
+        - Updates failure counts and status check timers
+        
+        The method considers a submission overdue if more than 5 minutes have passed
+        since the last successful submission.
+
+        Raises:
+            SystemExit: If failure count reaches threshold (3)
+            Various exceptions possible during file operations and notifications
         """
         try:
 
@@ -407,15 +428,26 @@ class EventDetectorProcess(multiprocessing.Process):
 
     async def _detect_events(self):
         """
-        Main event detection loop.
+        Main event detection loop that continuously monitors the blockchain for new events.
 
         This method:
-        1. Pings reporting service periodically
-        2. Fetches current block number
-        3. Processes any new events since last processed block
-        4. Updates last processed block
-        5. Handles any errors that occur during processing
+        1. Initializes the detector if not already done
+        2. Periodically pings reporting service to indicate active status
+        3. Fetches and processes new blocks since last processed block
+        4. Handles event detection and distribution to processors
+        5. Manages error conditions and recovery
+        6. Implements configurable polling intervals
+        
+        The method maintains state about the last processed block and ensures
+        proper error handling and notification in case of issues.
+
+        Raises:
+            Various exceptions possible during RPC calls and event processing
         """
+        if not self._initialized:
+            await self.init()
+            self._initialized = True
+
         while True:
             current_time = int(time.time())
             if current_time - self.last_status_check_time > 120:
@@ -469,8 +501,6 @@ class EventDetectorProcess(multiprocessing.Process):
 
             if not self._last_processed_block:
                 self._last_processed_block = current_block - 1
-                # save it to last_processed_block file
-                await self._save_last_processed_block()
 
             if self._last_processed_block >= current_block:
                 self._logger.info(
@@ -486,7 +516,6 @@ class EventDetectorProcess(multiprocessing.Process):
                     'processing current block',
                 )
                 self._last_processed_block = current_block - 10
-                await self._save_last_processed_block()
 
             # Get events from current block to last_processed_block
             try:
@@ -523,7 +552,6 @@ class EventDetectorProcess(multiprocessing.Process):
                 )
 
             self._last_processed_block = current_block
-            await self._save_last_processed_block()
             self._logger.info(
                 'DONE: Processed blocks till {}',
                 current_block,
@@ -539,10 +567,17 @@ class EventDetectorProcess(multiprocessing.Process):
         error: Exception,
     ):
         """
-        Sends a Telegram notification about epoch processing errors.
+        Send a Telegram notification about epoch processing errors.
+
+        This method constructs and sends a detailed error notification via Telegram
+        when epoch processing encounters issues. The notification includes instance
+        details, error information, and current status.
 
         Args:
             error (Exception): The error that occurred during processing
+
+        Raises:
+            Various exceptions possible during HTTP requests
         """
         telegram_message = TelegramEpochProcessingReportMessage(
             chatId=settings.reporting.telegram_chat_id,
@@ -566,10 +601,17 @@ class EventDetectorProcess(multiprocessing.Process):
         Main entry point for the event detector process.
         
         This method:
-        1. Sets up resource limits
-        2. Configures signal handlers
-        3. Starts the event detection loop
-        4. Handles any fatal errors
+        1. Sets up system resource limits for file descriptors
+        2. Configures signal handlers for graceful shutdown
+        3. Initializes and runs the event detection loop
+        4. Handles fatal errors and process termination
+        
+        The method ensures proper cleanup on exit and maintains
+        process stability during runtime.
+
+        Raises:
+            SystemExit: On fatal errors in the event loop
+            Various exceptions possible during initialization and runtime
         """
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(

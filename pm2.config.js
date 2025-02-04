@@ -17,7 +17,7 @@ module.exports = {
       env: {
         NODE_ENV: NODE_ENV,
       },
-      cron_restart: "0 * * * *",
+      cron_restart: "0 * * * *", // Restarts the process every hour at minute 0 (e.g. 1:00, 2:00, 3:00, etc)
       autorestart: true,
       kill_timeout: 5000,
       stop_exit_codes: [0, 143],

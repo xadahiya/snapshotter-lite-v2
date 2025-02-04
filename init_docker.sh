@@ -37,6 +37,4 @@ if [ $ret_status -ne 0 ]; then
 fi
 
 echo 'starting processes...';
-pm2 start pm2.config.js
-
-pm2 logs --lines 1000
+poetry run python -m snapshotter.system_event_detector

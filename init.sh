@@ -7,6 +7,8 @@ export POWERLOOM_CHAIN=mainnet
 export SOURCE_CHAIN=ETH
 export FULL_NAMESPACE="${POWERLOOM_CHAIN}-${NAMESPACE}-${SOURCE_CHAIN}"
 
+./configure-environment.sh --skip-credential-update --data-market-contract-number 2
+
 source .env-${FULL_NAMESPACE}
 
 echo "📦 Cloning fresh config repo..."

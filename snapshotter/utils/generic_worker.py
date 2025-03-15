@@ -466,7 +466,7 @@ class GenericAsyncWorker:
 
     async def _init_grpc(self):
         self._grpc_channel = Channel(
-            host='localhost:50051',
+            host='localhost',
             port=settings.local_collector_port,
             ssl=False,
         )

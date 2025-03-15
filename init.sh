@@ -9,7 +9,7 @@ export FULL_NAMESPACE="${POWERLOOM_CHAIN}-${NAMESPACE}-${SOURCE_CHAIN}"
 
 ./configure-environment.sh --skip-credential-update --data-market-contract-number 2
 
-source .env-${FULL_NAMESPACE}
+source .env-mainnet-UNISWAPV2-ETH
 
 echo "📦 Cloning fresh config repo..."
 git clone $SNAPSHOT_CONFIG_REPO "config"

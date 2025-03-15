@@ -1,5 +1,6 @@
 #!/bin/bash
 
+source .env-mainnet-UNISWAPV2-ETH
 
 echo 'Snapshotter node: populating setting from environment values...';
 
